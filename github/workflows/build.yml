@@ -1,0 +1,109 @@
+name: Build Flutter APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract ZIP
+        run: unzip flutter_email.zip && ls -la
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: stable
+
+      - name: Fix build.gradle
+        run: |
+          GRADLE_FILE=$(find . -path "*/super_up_app/android/app/build.gradle" | head -1)
+          echo "Found: $GRADLE_FILE"
+          cat > "$GRADLE_FILE" << GRADLE
+          plugins {
+              id 'com.android.application'
+              id 'kotlin-android'
+              id 'com.google.gms.google-services'
+              id "dev.flutter.flutter-gradle-plugin"
+          }
+          def localProperties = new Properties()
+          def localPropertiesFile = rootProject.file('local.properties')
+          if (localPropertiesFile.exists()) {
+              localPropertiesFile.withReader('UTF-8') { reader ->
+                  localProperties.load(reader)
+              }
+          }
+          def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
+          if (flutterVersionCode == null) { flutterVersionCode = '1' }
+          def flutterVersionName = localProperties.getProperty('flutter.versionName')
+          if (flutterVersionName == null) { flutterVersionName = '1.0' }
+          android {
+              compileSdkVersion 36
+              namespace = "com.superup.online"
+              ndkVersion = "28.0.12674087"
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_1_8
+                  targetCompatibility = JavaVersion.VERSION_1_8
+                  coreLibraryDesugaringEnabled true
+              }
+              kotlinOptions { jvmTarget = JavaVersion.VERSION_1_8 }
+              sourceSets { main.java.srcDirs += 'src/main/kotlin' }
+              defaultConfig {
+                  applicationId "com.superup.online"
+                  minSdkVersion flutter.minSdkVersion
+                  targetSdkVersion 36
+                  multiDexEnabled true
+                  versionCode flutterVersionCode.toInteger()
+                  versionName flutterVersionName
+              }
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                      shrinkResources false
+                      signingConfig signingConfigs.debug
+                  }
+              }
+          }
+          flutter { source '../..' }
+          dependencies {
+              coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
+              implementation 'androidx.multidex:multidex:2.0.1'
+          }
+          GRADLE
+
+      - name: Install Melos and Bootstrap
+        run: |
+          APP_DIR=$(find . -name "melos.yaml" | head -1 | xargs dirname)
+          cd "$APP_DIR"
+          dart pub global activate melos
+          export PATH="$PATH:$HOME/.pub-cache/bin"
+          melos bootstrap
+
+      - name: Build APK
+        run: |
+          APP_DIR=$(find . -path "*/apps/super_up_app" -type d | head -1)
+          cd "$APP_DIR"
+          export PATH="$PATH:$HOME/.pub-cache/bin"
+          flutter build apk --release --no-tree-shake-icons --android-skip-build-dependency-validation
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SuperUp-APK
+          path: "**/app-release.apk"
+          retention-days: 7
+          
